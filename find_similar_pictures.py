@@ -12,28 +12,66 @@ from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QTimer
 
 def calculate_image_hash(image_path):
-    """计算图片的多重哈希值"""
+    """计算图片的多重哈希值，包含旋转不变性"""
     try:
         with Image.open(image_path) as img:
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             
+            # 基础哈希
             phash = imagehash.phash(img)
             dhash = imagehash.dhash(img)
             
+            # 计算4个旋转角度的哈希值
+            rotations = [
+                str(imagehash.average_hash(img)),
+                str(imagehash.average_hash(img.rotate(90))),
+                str(imagehash.average_hash(img.rotate(180))),
+                str(imagehash.average_hash(img.rotate(270)))
+            ]
+            
+            # 水平和垂直翻转的哈希值
+            flipped_h = str(imagehash.average_hash(img.transpose(Image.FLIP_LEFT_RIGHT)))
+            flipped_v = str(imagehash.average_hash(img.transpose(Image.FLIP_TOP_BOTTOM)))
+            
             return {
                 'phash': str(phash),
-                'dhash': str(dhash)
+                'dhash': str(dhash),
+                'rotations': rotations,
+                'flipped_h': flipped_h,
+                'flipped_v': flipped_v
             }
     except Exception as e:
         print(f"处理图片 {image_path} 时出错: {str(e)}")
         return None
 
 def calculate_similarity(hash1, hash2):
-    """计算两张图片的综合相似度"""
+    """计算考虑旋转和翻转的综合相似度"""
+    # 基础哈希相似度
     phash_distance = sum(c1 != c2 for c1, c2 in zip(hash1['phash'], hash2['phash']))
     dhash_distance = sum(c1 != c2 for c1, c2 in zip(hash1['dhash'], hash2['dhash']))
-    weighted_distance = 0.6 * phash_distance + 0.4 * dhash_distance
+    
+    # 计算所有旋转角度的最小距离
+    rotation_distances = []
+    for rot1 in hash1['rotations']:
+        for rot2 in hash2['rotations']:
+            dist = sum(c1 != c2 for c1, c2 in zip(rot1, rot2))
+            rotation_distances.append(dist)
+    min_rotation_distance = min(rotation_distances) if rotation_distances else 0
+    
+    # 计算翻转的最小距离
+    flip_h_distance = sum(c1 != c2 for c1, c2 in zip(hash1['flipped_h'], hash2['flipped_h']))
+    flip_v_distance = sum(c1 != c2 for c1, c2 in zip(hash1['flipped_v'], hash2['flipped_v']))
+    min_flip_distance = min(flip_h_distance, flip_v_distance)
+    
+    # 综合加权计算
+    weighted_distance = (
+        0.4 * phash_distance +      # 感知哈希权重
+        0.3 * dhash_distance +      # 差异哈希权重
+        0.2 * min_rotation_distance + # 旋转不变性权重
+        0.1 * min_flip_distance      # 翻转不变性权重
+    )
+    
     return weighted_distance
 
 def find_similar_images(folder_path, threshold=4, progress_callback=None):
@@ -209,7 +247,7 @@ class ImageViewer(QMainWindow):
             return
 
         reply = QMessageBox.question(self, '确认', 
-                                   f"确定要删除所有选中�� {len(to_delete)} 张图片吗？",
+                                   f"确定要删除所有选中 {len(to_delete)} 张图片吗？",
                                    QMessageBox.Yes | QMessageBox.No)
 
         if reply == QMessageBox.Yes:
