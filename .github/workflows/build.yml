@@ -33,7 +33,7 @@ jobs:
                      find_similar_pictures.py
 
       - name: Upload Windows Build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: SimilarImageFinder-Windows
           path: dist/SimilarImageFinder.exe
@@ -63,7 +63,7 @@ jobs:
                      find_similar_pictures.py
 
       - name: Upload macOS Build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: SimilarImageFinder-macOS
           path: dist/SimilarImageFinder.app
@@ -75,7 +75,7 @@ jobs:
     
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         
       - name: Create Release
         id: create_release
