@@ -7,7 +7,7 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QLabel, QScrollArea, 
                             QGridLayout, QCheckBox, QMessageBox, QFileDialog,
-                            QProgressDialog, QSlider)
+                            QProgressDialog, QSlider, QFrame)
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QTimer
 
@@ -80,12 +80,11 @@ class ImageViewer(QMainWindow):
     def __init__(self, similar_groups):
         super().__init__()
         self.similar_groups = similar_groups
-        self.current_group = 0
         self.image_widgets = []
         self.checkboxes = []
         
         self.init_ui()
-        self.load_current_group()
+        self.load_all_groups()
         self.center_window()
 
     def init_ui(self):
@@ -99,20 +98,14 @@ class ImageViewer(QMainWindow):
 
         # 控制按钮区域
         control_layout = QHBoxLayout()
-        self.prev_button = QPushButton('上一组')
-        self.next_button = QPushButton('下一组')
-        self.group_label = QLabel()
-        self.delete_button = QPushButton('删除选中')
+        self.group_label = QLabel(f"共 {len(self.similar_groups)} 组相似图片")
+        self.delete_all_button = QPushButton('删除所有选中')
 
-        self.prev_button.clicked.connect(self.prev_group)
-        self.next_button.clicked.connect(self.next_group)
-        self.delete_button.clicked.connect(self.delete_selected)
+        self.delete_all_button.clicked.connect(self.delete_all_selected)
 
-        control_layout.addWidget(self.prev_button)
-        control_layout.addWidget(self.next_button)
         control_layout.addWidget(self.group_label)
         control_layout.addStretch()
-        control_layout.addWidget(self.delete_button)
+        control_layout.addWidget(self.delete_all_button)
 
         layout.addLayout(control_layout)
 
@@ -123,81 +116,89 @@ class ImageViewer(QMainWindow):
 
         # 创建图片显示区域
         self.image_widget = QWidget()
-        self.image_layout = QGridLayout(self.image_widget)
+        self.image_layout = QVBoxLayout(self.image_widget)  # 使用垂直布局
         scroll.setWidget(self.image_widget)
 
-    def load_current_group(self):
+    def load_all_groups(self):
         # 清除当前显示的图片
         for widget in self.image_widgets:
             widget.setParent(None)
         self.image_widgets.clear()
         self.checkboxes.clear()
 
-        if not self.similar_groups or self.current_group >= len(self.similar_groups):
-            return
+        # 遍历所有组
+        for group_idx, (_, group) in enumerate(self.similar_groups.items()):
+            # 创建组容器
+            group_container = QWidget()
+            group_layout = QVBoxLayout(group_container)
+            
+            # 添加组标签
+            group_label = QLabel(f"第 {group_idx + 1} 组")
+            group_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 10px;")
+            group_layout.addWidget(group_label)
+            
+            # 创建图片网格布局
+            images_grid = QGridLayout()
+            row = 0
+            col = 0
+            max_cols = 3
 
-        self.group_label.setText(f"当前组: {self.current_group + 1}/{len(self.similar_groups)}")
-        
-        _, group = list(self.similar_groups.items())[self.current_group]
-        
-        row = 0
-        col = 0
-        max_cols = 3
+            for i, img_path in enumerate(group):
+                try:
+                    # 创建图片容器
+                    container = QWidget()
+                    container_layout = QVBoxLayout(container)
 
-        for img_path in group:
-            try:
-                # 创建图片容器
-                container = QWidget()
-                container_layout = QVBoxLayout(container)
+                    # 加载和显示图片
+                    img = Image.open(img_path)
+                    img.thumbnail((300, 300))
+                    img_qt = img.convert('RGB')
+                    height, width = img_qt.size
+                    bytes_per_line = 3 * width
+                    qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
+                    pixmap = QPixmap.fromImage(qt_image)
+                    
+                    image_label = QLabel()
+                    image_label.setPixmap(pixmap)
+                    container_layout.addWidget(image_label)
 
-                # 加载和显示图片
-                img = Image.open(img_path)
-                img.thumbnail((300, 300))
-                img_qt = img.convert('RGB')
-                height, width = img_qt.size
-                bytes_per_line = 3 * width
-                qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
-                pixmap = QPixmap.fromImage(qt_image)
-                
-                image_label = QLabel()
-                image_label.setPixmap(pixmap)
-                container_layout.addWidget(image_label)
+                    # 添加文件名
+                    name_label = QLabel(os.path.basename(img_path))
+                    name_label.setWordWrap(True)
+                    container_layout.addWidget(name_label)
 
-                # 添加文件名
-                name_label = QLabel(os.path.basename(img_path))
-                name_label.setWordWrap(True)
-                container_layout.addWidget(name_label)
+                    # 添加复选框，除第一张图片外都默认选中
+                    checkbox = QCheckBox("选择删除")
+                    if i > 0:  # 如果不是第一张图片，则默认选中
+                        checkbox.setChecked(True)
+                    container_layout.addWidget(checkbox)
+                    self.checkboxes.append((checkbox, img_path))
 
-                # 添加复选框
-                checkbox = QCheckBox("选择删除")
-                container_layout.addWidget(checkbox)
-                self.checkboxes.append((checkbox, img_path))
+                    images_grid.addWidget(container, row, col)
+                    self.image_widgets.append(container)
 
-                self.image_layout.addWidget(container, row, col)
-                self.image_widgets.append(container)
+                    col += 1
+                    if col >= max_cols:
+                        col = 0
+                        row += 1
 
-                col += 1
-                if col >= max_cols:
-                    col = 0
-                    row += 1
+                except Exception as e:
+                    print(f"加载图片失败 {img_path}: {str(e)}")
 
-            except Exception as e:
-                print(f"加载图片失败 {img_path}: {str(e)}")
+            # 添加分隔线
+            group_layout.addLayout(images_grid)
+            separator = QFrame()
+            separator.setFrameShape(QFrame.HLine)
+            separator.setFrameShadow(QFrame.Sunken)
+            group_layout.addWidget(separator)
+            
+            # 将组添加到主布局
+            self.image_layout.addWidget(group_container)
+            self.image_widgets.append(group_container)
 
-    def prev_group(self):
-        if self.current_group > 0:
-            self.current_group -= 1
-            self.load_current_group()
-
-    def next_group(self):
-        if self.current_group < len(self.similar_groups) - 1:
-            self.current_group += 1
-            self.load_current_group()
-
-    def delete_selected(self):
-        if not self.similar_groups:
-            return
-
+    def delete_all_selected(self):
+        """一键删除所有组中选中的图片"""
+        # 收集所有选中的图片
         to_delete = []
         for checkbox, path in self.checkboxes:
             if checkbox.isChecked():
@@ -208,10 +209,11 @@ class ImageViewer(QMainWindow):
             return
 
         reply = QMessageBox.question(self, '确认', 
-                                   f"确定要删除选中的 {len(to_delete)} 张图片吗？",
+                                   f"确定要删除所有选中�� {len(to_delete)} 张图片吗？",
                                    QMessageBox.Yes | QMessageBox.No)
 
         if reply == QMessageBox.Yes:
+            # 删除文件
             for path in to_delete:
                 try:
                     os.remove(path)
@@ -219,18 +221,17 @@ class ImageViewer(QMainWindow):
                 except Exception as e:
                     print(f"删除失败 {path}: {str(e)}")
 
-            # 更新组
+            # 更新所有组
             self.similar_groups = {k: [p for p in v if p not in to_delete] 
                                  for k, v in self.similar_groups.items()}
+            # 移除只剩一张图片的组
             self.similar_groups = {k: v for k, v in self.similar_groups.items() if len(v) > 1}
 
             if not self.similar_groups:
                 QMessageBox.information(self, "提示", "所有组都已处理完毕")
                 self.close()
             else:
-                if self.current_group >= len(self.similar_groups):
-                    self.current_group = len(self.similar_groups) - 1
-                self.load_current_group()
+                self.load_all_groups()
 
     def center_window(self):
         # 获取屏幕几何信息
@@ -334,10 +335,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", "文件夹不存在！")
             return
 
-        # 创建进度对话框
-        progress = QProgressDialog("正在扫描图片...", "取消", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
+        # 创建进度对话框，使用 QString 来处理中文
+        progress = QProgressDialog()
         progress.setWindowTitle("扫描进度")
+        progress.setLabelText("正在扫描图片...")
+        progress.setCancelButtonText("取消")
+        progress.setRange(0, 100)
+        progress.setWindowModality(Qt.WindowModal)
         progress.setAutoClose(True)
         progress.setMinimumDuration(0)
         
