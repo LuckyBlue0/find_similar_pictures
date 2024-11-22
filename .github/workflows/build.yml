@@ -26,8 +26,7 @@ jobs:
       - name: Create resources directory
         run: |
           mkdir -p resources
-          echo "Creating placeholder icon file"
-          copy nul resources\app.ico
+          echo $null > resources/app.ico
           
       - name: Build with PyInstaller
         run: |
