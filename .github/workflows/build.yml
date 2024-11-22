@@ -1,0 +1,89 @@
+name: Build Application
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送版本标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow imagehash PyQt5
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name="SimilarImageFinder" `
+                     --windowed `
+                     --onefile `
+                     --icon=resources/app.ico `
+                     --add-data="resources;resources" `
+                     find_similar_pictures.py
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v2
+        with:
+          name: SimilarImageFinder-Windows
+          path: dist/SimilarImageFinder.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow imagehash PyQt5
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name="SimilarImageFinder" \
+                     --windowed \
+                     --onefile \
+                     --icon=resources/app.icns \
+                     --add-data="resources:resources" \
+                     find_similar_pictures.py
+
+      - name: Upload macOS Build
+        uses: actions/upload-artifact@v2
+        with:
+          name: SimilarImageFinder-macOS
+          path: dist/SimilarImageFinder.app
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v2
+        
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            SimilarImageFinder-Windows/SimilarImageFinder.exe
+            SimilarImageFinder-macOS/SimilarImageFinder.app/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

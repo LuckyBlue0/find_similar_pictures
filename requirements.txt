@@ -1,0 +1,3 @@
+Pillow
+imagehash
+PyQt5 
