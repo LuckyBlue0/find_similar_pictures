@@ -23,13 +23,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller pillow imagehash PyQt5
           
+      - name: Create resources directory
+        run: |
+          mkdir -p resources
+          echo "Creating placeholder icon file"
+          copy nul resources\app.ico
+          
       - name: Build with PyInstaller
         run: |
           pyinstaller --name="SimilarImageFinder" `
                      --windowed `
                      --onefile `
-                     --icon=resources/app.ico `
-                     --add-data="resources;resources" `
                      find_similar_pictures.py
 
       - name: Upload Windows Build
@@ -53,13 +57,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller pillow imagehash PyQt5
           
+      - name: Create resources directory
+        run: |
+          mkdir -p resources
+          touch resources/app.icns
+          
       - name: Build with PyInstaller
         run: |
           pyinstaller --name="SimilarImageFinder" \
                      --windowed \
                      --onefile \
-                     --icon=resources/app.icns \
-                     --add-data="resources:resources" \
                      find_similar_pictures.py
 
       - name: Upload macOS Build
