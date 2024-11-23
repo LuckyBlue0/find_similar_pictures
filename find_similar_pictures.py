@@ -7,7 +7,7 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QLabel, QScrollArea, 
                             QGridLayout, QCheckBox, QMessageBox, QFileDialog,
-                            QProgressDialog, QSlider, QFrame)
+                            QProgressDialog, QSlider, QFrame, QDialog)
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QTimer
 
@@ -217,7 +217,7 @@ class ImageViewer(QMainWindow):
                 images_grid = QGridLayout()
                 row = 0
                 col = 0
-                max_cols = 3
+                max_cols = 4
 
                 for i, img_path in enumerate(group):
                     try:
@@ -264,15 +264,18 @@ class ImageViewer(QMainWindow):
 
         # 加载和显示图片
         img = Image.open(img_path)
-        img.thumbnail((300, 300))
+        img.thumbnail((200, 200))
         img_qt = img.convert('RGB')
         height, width = img_qt.size
         bytes_per_line = 3 * width
         qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image)
         
+        # 创建图片标签并添加点击事件
         image_label = QLabel()
         image_label.setPixmap(pixmap)
+        image_label.setCursor(Qt.PointingHandCursor)  # 改变鼠标样式
+        image_label.mousePressEvent = lambda e: self.show_large_image(img_path)  # 添加点击事件
         container_layout.addWidget(image_label)
 
         # 添加文件名
@@ -295,19 +298,19 @@ class ImageViewer(QMainWindow):
         self.scroll.verticalScrollBar().setValue(0)
 
     def delete_all_selected(self):
-        """一键删除所有组中选中的图片"""
-        # 收集所有选中的图片
+        """一键删除所有组中除第一张外的所有图片"""
+        # 收集所有组中除第一张外的所有图片
         to_delete = []
-        for checkbox, path in self.checkboxes:
-            if checkbox.isChecked():
-                to_delete.append(path)
+        for _, group in self.similar_groups:
+            # 跳过第一张图片，收集其余所有图片
+            to_delete.extend(group[1:])
 
         if not to_delete:
-            QMessageBox.information(self, "提示", "请先选择要删除的图片")
+            QMessageBox.information(self, "提示", "没有需要删除的图片")
             return
 
         reply = QMessageBox.question(self, '确认', 
-                                   f"确定要删除所有选中的 {len(to_delete)} 张图片吗？",
+                                   f"确定要删除所有组中除第一张外的所有图片吗？\n共 {len(to_delete)} 张图片",
                                    QMessageBox.Yes | QMessageBox.No)
 
         if reply == QMessageBox.Yes:
@@ -319,21 +322,24 @@ class ImageViewer(QMainWindow):
                 except Exception as e:
                     print(f"删除失败 {path}: {str(e)}")
 
-            # 更新所有组
+            # 更新所有组，只保留第一张图片
             updated_groups = []
             for hash_key, group in self.similar_groups:
-                updated_group = [p for p in group if p not in to_delete]
-                if len(updated_group) > 1:
-                    updated_groups.append((hash_key, updated_group))
+                if len(group) > 0:
+                    # 只保留第一张图片
+                    updated_groups.append((hash_key, [group[0]]))
             
-            self.similar_groups = updated_groups
+            # 移除只有一张图片的组
+            self.similar_groups = [(k, g) for k, g in updated_groups if len(g) > 1]
             
             if not self.similar_groups:
                 QMessageBox.information(self, "提示", "所有组都已处理完毕")
                 self.close()
             else:
+                # 重新计算总页数
                 self.total_pages = (len(self.similar_groups) + self.groups_per_page - 1) // self.groups_per_page
                 self.current_page = 0
+                # 重新加载页面
                 self.load_current_page()
                 self.update_selected_count()
 
@@ -353,9 +359,88 @@ class ImageViewer(QMainWindow):
         self.is_loading = False
 
     def update_selected_count(self):
-        """更新选中的图片数量"""
-        count = sum(1 for checkbox, _ in self.checkboxes if checkbox.isChecked())
-        self.selected_count_label.setText(f'已选中: {count} 张图片')
+        """更新选中的图片数量，包括未加载的图片"""
+        # 已加载图片中的选中数量
+        loaded_count = sum(1 for checkbox, _ in self.checkboxes if checkbox.isChecked())
+        
+        # 未加载图片中除第一张外的图片数量
+        unloaded_count = 0
+        start_idx = (self.current_page + 1) * self.groups_per_page  # 从下一页开始计算
+        for idx in range(start_idx, len(self.similar_groups)):
+            if idx not in self.loaded_groups:
+                _, group = self.similar_groups[idx]
+                # 除第一张外的所有图片都会被选中
+                unloaded_count += len(group) - 1
+
+        total_count = loaded_count + unloaded_count
+        self.selected_count_label.setText(f'已选中: {total_count} 张图片')
+
+    def show_large_image(self, img_path):
+        """显示大图对话框"""
+        dialog = ImageDialog(img_path, self)
+        dialog.exec_()
+
+class ImageDialog(QDialog):
+    """大图查看对话框"""
+    def __init__(self, img_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('图片查看')
+        self.setModal(True)
+        
+        # 设置对话框大小为屏幕大小的80%
+        screen = QApplication.desktop().screenGeometry()
+        self.resize(int(screen.width() * 0.8), int(screen.height() * 0.8))
+        
+        # 创建布局
+        layout = QVBoxLayout(self)
+        
+        # 创建滚动区域
+        scroll = QScrollArea(self)
+        layout.addWidget(scroll)
+        scroll.setWidgetResizable(True)
+        
+        # 加载图片
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        
+        # 显示文件名
+        name_label = QLabel(os.path.basename(img_path))
+        name_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(name_label)
+        
+        # 加载和显示图片
+        img = Image.open(img_path)
+        # 调整图片大小，保持比例，但不超过对话框大小
+        img.thumbnail((int(screen.width() * 0.75), int(screen.height() * 0.75)))
+        img_qt = img.convert('RGB')
+        height, width = img_qt.size
+        bytes_per_line = 3 * width
+        qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(qt_image)
+        
+        image_label = QLabel()
+        image_label.setPixmap(pixmap)
+        image_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(image_label)
+        
+        scroll.setWidget(content)
+        
+        # 添加关闭按钮
+        close_button = QPushButton('关闭')
+        close_button.clicked.connect(self.close)
+        layout.addWidget(close_button)
+        
+        # 居中显示对话框
+        self.center_dialog()
+
+    def center_dialog(self):
+        """居中显示对话框"""
+        screen = QApplication.desktop().screenGeometry()
+        size = self.geometry()
+        self.move(
+            (screen.width() - size.width()) // 2,
+            (screen.height() - size.height()) // 2
+        )
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -365,7 +450,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle('相似图片查找器')
-        self.setGeometry(100, 100, 400, 300)
+        self.setGeometry(100, 100, 400, 350)  # 增加窗口高度
 
         # 创建中央部件和布局
         central_widget = QWidget()
@@ -411,18 +496,30 @@ class MainWindow(QMainWindow):
         select_button.setMinimumHeight(40)
         layout.addWidget(select_button, alignment=Qt.AlignCenter)
 
+        # 添加当前文件夹路径标签
+        self.folder_path_label = QLabel('')
+        self.folder_path_label.setAlignment(Qt.AlignCenter)
+        self.folder_path_label.setWordWrap(True)
+        layout.addWidget(self.folder_path_label)
+
+        # 添加继续扫描按钮（初始时禁用）
+        self.rescan_button = QPushButton('继续扫描')
+        self.rescan_button.clicked.connect(self.rescan_folder)
+        self.rescan_button.setMinimumWidth(120)
+        self.rescan_button.setMinimumHeight(40)
+        self.rescan_button.setEnabled(False)  # 初始时禁用
+        layout.addWidget(self.rescan_button, alignment=Qt.AlignCenter)
+
         # 添加状态标签
         self.status_label = QLabel('')
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
 
-        # 添加选中数量标签
-        self.selected_count_label = QLabel('已选中: 0 张图片')
-        self.selected_count_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.selected_count_label)
-
         # 添加一些空白空间
         layout.addStretch()
+
+        # 保存当前选择的文件夹路径
+        self.current_folder = ''
 
     def center_window(self):
         # 获取屏幕几何信息
@@ -453,7 +550,27 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", "文件夹不存在！")
             return
 
-        # 创建进度对话框，使用 QString 来处理中文
+        # 保存当前文件夹路径
+        self.current_folder = folder_path
+        # 更新路径显示
+        self.folder_path_label.setText(f"当前文件夹: {folder_path}")
+        # 启用继续扫描按钮
+        self.rescan_button.setEnabled(True)
+
+        self.start_scan()
+
+    def rescan_folder(self):
+        """继续扫描当前文件夹"""
+        if self.current_folder and os.path.exists(self.current_folder):
+            self.start_scan()
+        else:
+            QMessageBox.critical(self, "错误", "文件夹不存在！")
+            self.folder_path_label.setText("")
+            self.rescan_button.setEnabled(False)
+
+    def start_scan(self):
+        """开始扫描过程"""
+        # 创建进度对话框
         progress = QProgressDialog()
         progress.setWindowTitle("扫描进度")
         progress.setLabelText("正在扫描图片...")
@@ -474,7 +591,7 @@ class MainWindow(QMainWindow):
         threshold = self.threshold_slider.value()
         
         # 开始扫描
-        similar_groups = find_similar_images(folder_path, threshold=threshold, 
+        similar_groups = find_similar_images(self.current_folder, threshold=threshold, 
                                           progress_callback=update_progress)
         
         progress.setValue(100)
