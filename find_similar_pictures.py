@@ -117,12 +117,17 @@ def find_similar_images(folder_path, threshold=4, progress_callback=None):
 class ImageViewer(QMainWindow):
     def __init__(self, similar_groups):
         super().__init__()
-        self.similar_groups = similar_groups
+        self.similar_groups = list(similar_groups.items())
         self.image_widgets = []
         self.checkboxes = []
+        self.current_page = 0
+        self.groups_per_page = 5
+        self.total_pages = (len(self.similar_groups) + self.groups_per_page - 1) // self.groups_per_page
+        self.is_loading = False
+        self.loaded_groups = set()  # 记录已加载的组
         
         self.init_ui()
-        self.load_all_groups()
+        self.load_current_page()
         self.center_window()
 
     def init_ui(self):
@@ -137,102 +142,157 @@ class ImageViewer(QMainWindow):
         # 控制按钮区域
         control_layout = QHBoxLayout()
         self.group_label = QLabel(f"共 {len(self.similar_groups)} 组相似图片")
+        self.page_label = QLabel(f"共{self.total_pages} 页")
+        self.selected_count_label = QLabel('已选中: 0 张图片')
+        self.top_button = QPushButton('回到顶部')
         self.delete_all_button = QPushButton('删除所有选中')
-
+        self.top_button.clicked.connect(self.scroll_to_top)
         self.delete_all_button.clicked.connect(self.delete_all_selected)
 
         control_layout.addWidget(self.group_label)
+        control_layout.addWidget(self.page_label)
+        control_layout.addWidget(self.selected_count_label)
         control_layout.addStretch()
+        control_layout.addWidget(self.top_button)
         control_layout.addWidget(self.delete_all_button)
 
         layout.addLayout(control_layout)
 
         # 创建滚动区域
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        layout.addWidget(scroll)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        layout.addWidget(self.scroll)
 
         # 创建图片显示区域
         self.image_widget = QWidget()
-        self.image_layout = QVBoxLayout(self.image_widget)  # 使用垂直布局
-        scroll.setWidget(self.image_widget)
+        self.image_layout = QVBoxLayout(self.image_widget)
+        self.scroll.setWidget(self.image_widget)
 
-    def load_all_groups(self):
-        # 清除当前显示的图片
+        # 添加滚动条信号连接
+        self.scroll.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        self.last_scroll_value = 0  # 添加滚动位置记录
+
+    def on_scroll(self, value):
+        """处理滚动事件"""
+        if self.is_loading:
+            return
+            
+        scrollbar = self.scroll.verticalScrollBar()
+        
+        # 只处理向下滚动到底部的情况
+        if value > self.last_scroll_value and value >= scrollbar.maximum() - 50:  # 接近底部时
+            if self.current_page < self.total_pages - 1:
+                self.is_loading = True
+                self.current_page += 1
+                self.append_next_page()
+                QTimer.singleShot(200, self.reset_loading_state)
+        
+        self.last_scroll_value = value
+
+    def append_next_page(self):
+        """追加加载下一页内容"""
+        # 计算要加载的组范围
+        start_idx = self.current_page * self.groups_per_page
+        end_idx = min(start_idx + self.groups_per_page, len(self.similar_groups))
+
+        # 更新页面标签
+        self.page_label.setText(f"共{self.total_pages} 页")
+
+        # 只加载新的组
+        for group_idx in range(start_idx, end_idx):
+            if group_idx not in self.loaded_groups:
+                self.loaded_groups.add(group_idx)
+                _, group = self.similar_groups[group_idx]
+                
+                # 创建组容器
+                group_container = QWidget()
+                group_layout = QVBoxLayout(group_container)
+                
+                # 添加组标签
+                group_label = QLabel(f"第 {group_idx + 1} 组")
+                group_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 10px;")
+                group_layout.addWidget(group_label)
+                
+                # 创建图片网格布局
+                images_grid = QGridLayout()
+                row = 0
+                col = 0
+                max_cols = 3
+
+                for i, img_path in enumerate(group):
+                    try:
+                        container = self.create_image_container(img_path, i)
+                        images_grid.addWidget(container, row, col)
+                        self.image_widgets.append(container)
+
+                        col += 1
+                        if col >= max_cols:
+                            col = 0
+                            row += 1
+
+                    except Exception as e:
+                        print(f"加载图片失败 {img_path}: {str(e)}")
+
+                # 添加分隔线
+                group_layout.addLayout(images_grid)
+                separator = QFrame()
+                separator.setFrameShape(QFrame.HLine)
+                separator.setFrameShadow(QFrame.Sunken)
+                group_layout.addWidget(separator)
+                
+                # 将组添加到主布局
+                self.image_layout.addWidget(group_container)
+                self.image_widgets.append(group_container)
+
+    def load_current_page(self):
+        """初始加载当前页"""
+        # 清除所有内容
         for widget in self.image_widgets:
             widget.setParent(None)
         self.image_widgets.clear()
         self.checkboxes.clear()
+        self.loaded_groups.clear()
+        
+        # 加载第一页
+        self.append_next_page()
+        self.update_selected_count()
 
-        # 遍历所有组
-        for group_idx, (_, group) in enumerate(self.similar_groups.items()):
-            # 创建组容器
-            group_container = QWidget()
-            group_layout = QVBoxLayout(group_container)
-            
-            # 添加组标签
-            group_label = QLabel(f"第 {group_idx + 1} 组")
-            group_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 10px;")
-            group_layout.addWidget(group_label)
-            
-            # 创建图片网格布局
-            images_grid = QGridLayout()
-            row = 0
-            col = 0
-            max_cols = 3
+    def create_image_container(self, img_path, index):
+        """创建单个图片容器"""
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
 
-            for i, img_path in enumerate(group):
-                try:
-                    # 创建图片容器
-                    container = QWidget()
-                    container_layout = QVBoxLayout(container)
+        # 加载和显示图片
+        img = Image.open(img_path)
+        img.thumbnail((300, 300))
+        img_qt = img.convert('RGB')
+        height, width = img_qt.size
+        bytes_per_line = 3 * width
+        qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(qt_image)
+        
+        image_label = QLabel()
+        image_label.setPixmap(pixmap)
+        container_layout.addWidget(image_label)
 
-                    # 加载和显示图片
-                    img = Image.open(img_path)
-                    img.thumbnail((300, 300))
-                    img_qt = img.convert('RGB')
-                    height, width = img_qt.size
-                    bytes_per_line = 3 * width
-                    qt_image = QImage(img_qt.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
-                    pixmap = QPixmap.fromImage(qt_image)
-                    
-                    image_label = QLabel()
-                    image_label.setPixmap(pixmap)
-                    container_layout.addWidget(image_label)
+        # 添加文件名
+        name_label = QLabel(os.path.basename(img_path))
+        name_label.setWordWrap(True)
+        container_layout.addWidget(name_label)
 
-                    # 添加文件名
-                    name_label = QLabel(os.path.basename(img_path))
-                    name_label.setWordWrap(True)
-                    container_layout.addWidget(name_label)
+        # 添加复选框
+        checkbox = QCheckBox("选择删除")
+        if index > 0:  # 如果不是第一张图片，则默认选中
+            checkbox.setChecked(True)
+        checkbox.stateChanged.connect(self.update_selected_count)
+        container_layout.addWidget(checkbox)
+        self.checkboxes.append((checkbox, img_path))
 
-                    # 添加复选框，除第一张图片外都默认选中
-                    checkbox = QCheckBox("选择删除")
-                    if i > 0:  # 如果不是第一张图片，则默认选中
-                        checkbox.setChecked(True)
-                    container_layout.addWidget(checkbox)
-                    self.checkboxes.append((checkbox, img_path))
+        return container
 
-                    images_grid.addWidget(container, row, col)
-                    self.image_widgets.append(container)
-
-                    col += 1
-                    if col >= max_cols:
-                        col = 0
-                        row += 1
-
-                except Exception as e:
-                    print(f"加载图片失败 {img_path}: {str(e)}")
-
-            # 添加分隔线
-            group_layout.addLayout(images_grid)
-            separator = QFrame()
-            separator.setFrameShape(QFrame.HLine)
-            separator.setFrameShadow(QFrame.Sunken)
-            group_layout.addWidget(separator)
-            
-            # 将组添加到主布局
-            self.image_layout.addWidget(group_container)
-            self.image_widgets.append(group_container)
+    def scroll_to_top(self):
+        """滚动到顶部"""
+        self.scroll.verticalScrollBar().setValue(0)
 
     def delete_all_selected(self):
         """一键删除所有组中选中的图片"""
@@ -247,7 +307,7 @@ class ImageViewer(QMainWindow):
             return
 
         reply = QMessageBox.question(self, '确认', 
-                                   f"确定要删除所有选中 {len(to_delete)} 张图片吗？",
+                                   f"确定要删除所有选中的 {len(to_delete)} 张图片吗？",
                                    QMessageBox.Yes | QMessageBox.No)
 
         if reply == QMessageBox.Yes:
@@ -260,16 +320,22 @@ class ImageViewer(QMainWindow):
                     print(f"删除失败 {path}: {str(e)}")
 
             # 更新所有组
-            self.similar_groups = {k: [p for p in v if p not in to_delete] 
-                                 for k, v in self.similar_groups.items()}
-            # 移除只剩一张图片的组
-            self.similar_groups = {k: v for k, v in self.similar_groups.items() if len(v) > 1}
-
+            updated_groups = []
+            for hash_key, group in self.similar_groups:
+                updated_group = [p for p in group if p not in to_delete]
+                if len(updated_group) > 1:
+                    updated_groups.append((hash_key, updated_group))
+            
+            self.similar_groups = updated_groups
+            
             if not self.similar_groups:
                 QMessageBox.information(self, "提示", "所有组都已处理完毕")
                 self.close()
             else:
-                self.load_all_groups()
+                self.total_pages = (len(self.similar_groups) + self.groups_per_page - 1) // self.groups_per_page
+                self.current_page = 0
+                self.load_current_page()
+                self.update_selected_count()
 
     def center_window(self):
         # 获取屏幕几何信息
@@ -281,6 +347,15 @@ class ImageViewer(QMainWindow):
         y = (screen.height() - size.height()) // 2
         # 移动窗口
         self.move(x, y)
+
+    def reset_loading_state(self):
+        """重置加载状态"""
+        self.is_loading = False
+
+    def update_selected_count(self):
+        """更新选中的图片数量"""
+        count = sum(1 for checkbox, _ in self.checkboxes if checkbox.isChecked())
+        self.selected_count_label.setText(f'已选中: {count} 张图片')
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -340,6 +415,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel('')
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+
+        # 添加选中数量标签
+        self.selected_count_label = QLabel('已选中: 0 张图片')
+        self.selected_count_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.selected_count_label)
 
         # 添加一些空白空间
         layout.addStretch()
@@ -411,6 +491,12 @@ class MainWindow(QMainWindow):
         self.viewer.show()
         # 居中显示图片查看器
         self.viewer.center_window()
+
+    def update_selected_count(self):
+        """更新选中的图片数量"""
+        if hasattr(self, 'viewer'):
+            count = sum(1 for checkbox, _ in self.viewer.checkboxes if checkbox.isChecked())
+            self.viewer.selected_count_label.setText(f'已选中: {count} 张图片')
 
 def main():
     app = QApplication(sys.argv)
